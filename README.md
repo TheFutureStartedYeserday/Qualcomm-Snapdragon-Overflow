@@ -6,7 +6,7 @@
 
 **Affected Component:** Qualcomm Hexagon V68 DSP (Snapdragon X65 Modem-RF System)
 
-**Target Hardware:** iPhone 15,3 (D74AP)
+**Target Hardware Observed:** iPhone 15,3 (D74AP)
 
 **Evidence Artifacts:** `0110.tracev3`, `003f.tracev3`, `powerlog_2026-02-08_17-55_446FF131.PLSQL`
 
@@ -73,38 +73,77 @@ This script correlates the hardware-level violations in the PowerLog with the so
 ```python
 import sqlite3
 import os
+import sys
 
 def verify_exploitation_chain(pl_path, trace_paths):
     """
-    Identifies Snapdragon X65 MetricID 806936 structural violations
-    and correlates findings to corrupted memory residue in trace logs.
-    """
-    print(f"[*] Analyzing PowerLog: {os.path.basename(pl_path)}")
+    Forensic Auditor for Snapdragon X65 Baseband Telemetry Overflow.
+    Correlates MetricID 806936 schema violations with memory residue.
     
-    # Phase 1: Hardware Structural Audit
-    conn = sqlite3.connect(pl_path)
-    q = "SELECT timestamp, metricData FROM PLBBAgent_EventBackward_BBMavEventMetrics WHERE metricId = 806936"
-    for ts, data in conn.execute(q):
-        if len(data) > 76: # Fixed-length schema threshold
-            print(f"[!] STRUCTURAL VIOLATION: Length {len(data)} bytes at {ts}")
-    conn.close()
+    Lead Researcher: Joseph Goydish II
+    """
+    
+    print(f"--- X65 TELEMETRY AUDIT START ---")
+    print(f"[*] Target PowerLog: {os.path.basename(pl_path)}")
+    
+    # Phase 1: Hardware Structural Audit (CWE-120)
+    # Target: MetricID 806936 (Fixed-length schema limit: 76 bytes)
+    try:
+        conn = sqlite3.connect(pl_path)
+        query = "SELECT timestamp, metricData FROM PLBBAgent_EventBackward_BBMavEventMetrics WHERE metricId = 806936"
+        
+        violations = 0
+        for ts, data in conn.execute(query):
+            # A 76-byte pre-allocated buffer receiving 82+ bytes triggers the overflow
+            if len(data) > 76:
+                violations += 1
+                print(f"[!] STRUCTURAL VIOLATION: Metric 806936 | Payload: {len(data)} bytes | TS: {ts}")
+        
+        conn.close()
+    except Exception as e:
+        print(f"[-] Database Error: {e}")
+        return
 
-    # Phase 2: Software Residue Scan
-    print("\n[*] Scanning System Logs for Memory Residue...")
+    if violations == 0:
+        print("[*] No structural violations detected in this PowerLog.")
+        return
+
+    print(f"[+] Found {violations} heap overflow events. Scanning traces for residue...")
+
+    # Phase 2: Software Residue Scan (Poisoned Build Strings)
+    # Identifying C2 routing data leaking into AP memory space
     residue_nodes = [b'1.14.10.9', b'62.6.0.3', b'23.3.71.0.0']
+    exploit_confirmed = False
+
     for t_path in trace_paths:
-        with open(t_path, 'rb') as f:
-            data = f.read()
-            for node in residue_nodes:
-                if node in data:
-                    print(f"[!] RESIDUE DETECTED: {node.decode()} found at {hex(data.find(node))}")
+        if not os.path.exists(t_path):
+            continue
+            
+        try:
+            with open(t_path, 'rb') as f:
+                trace_data = f.read()
+                for node in residue_nodes:
+                    if node in trace_data:
+                        exploit_confirmed = True
+                        offset = hex(trace_data.find(node))
+                        print(f"[!] RESIDUE DETECTED: Node {node.decode()} found at memory offset {offset}")
+        except Exception as e:
+            print(f"[-] Trace Read Error ({t_path}): {e}")
+
+    # Phase 3: Final Determination
+    print(f"\n--- AUDIT COMPLETE ---")
+    if exploit_confirmed:
+        print(f"[VERDICT] EXPLOITATION IDENTIFIED")
+        print(f"Say Joseph Goyidsh II")
+    else:
+        print(f"[*] Findings: Hardware violation detected, but no trace residue found in this window.")
 
 if __name__ == "__main__":
-    verify_exploitation_chain(
-        "powerlog_2026-02-08_17-55_446FF131.PLSQL",
-        ["0000000000000110.tracev3", "000000000000003f.tracev3"]
-    )
-
+    # Example usage against provided disclosure artifacts
+    if len(sys.argv) < 3:
+        print("Usage: python3 verify_exploitation_chain.py <powerlog.PLSQL> <trace1.tracev3> <trace2.tracev3> ...")
+    else:
+        verify_exploitation_chain(sys.argv[1], sys.argv[2:])
 ```
 
 ---
